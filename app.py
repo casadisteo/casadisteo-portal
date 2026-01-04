@@ -118,11 +118,11 @@ def _coerce_numeric(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
 _require_secrets()
 authenticator = _authenticator()
 
-name, authentication_status, username = authenticator.login("Login", "main")
+name, authentication_status, username = authenticator.login(location="main", key="Login")
 
 if authentication_status:
     st.sidebar.success(f"Welcome {name}")
-    authenticator.logout("Logout", "sidebar")
+    authenticator.logout(button_name="Logout", location="sidebar", key="Logout")
 
     st.title("🏠 Casadisteo Supplies Portal")
 

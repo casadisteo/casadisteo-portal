@@ -1,0 +1,5 @@
+--index-url https://pypi.org/simple
+
+streamlit
+streamlit-authenticator
+pyyaml

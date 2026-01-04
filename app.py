@@ -71,7 +71,8 @@ def _login_gate() -> tuple[str, str]:
             st.session_state["auth_username"] = username
             st.session_state["auth_name"] = user.get("name", username)
             st.rerun()
-        st.error("Invalid credentials")
+        else:
+            st.error("Invalid credentials")
 
     st.stop()
 

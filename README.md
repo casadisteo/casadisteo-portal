@@ -60,7 +60,11 @@ Create a Google Sheet with a tab named `inventory` and headers like:
 
 Copy `.streamlit/secrets.toml.example` and fill it in. On Render, add it as a **Secret File** at path:
 
-`/opt/render/project/src/.streamlit/secrets.toml`
+Create a Secret File named:
+
+`secrets.toml`
+
+Render will mount it at `/etc/secrets/secrets.toml`, and the service startup will copy it into `.streamlit/secrets.toml` automatically.
 
 ### Deploy to Render
 

@@ -9,6 +9,23 @@ from google.oauth2.service_account import Credentials
 
 st.set_page_config(page_title="Casadisteo Portal", layout="wide")
 
+def _to_plain_dict(obj: Any) -> Any:
+    """
+    Streamlit secrets objects are immutable mappings. Some libraries (like
+    streamlit-authenticator) expect a mutable dict and may write into it.
+    Convert nested mappings/lists into plain Python types.
+    """
+    if isinstance(obj, dict):
+        return {k: _to_plain_dict(v) for k, v in obj.items()}
+    if hasattr(obj, "items"):
+        # Covers Streamlit's Secrets / AttrDict-like mappings
+        return {k: _to_plain_dict(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_to_plain_dict(v) for v in obj]
+    if isinstance(obj, tuple):
+        return tuple(_to_plain_dict(v) for v in obj)
+    return obj
+
 def _require_secrets() -> None:
     missing = []
     if "auth" not in st.secrets:
@@ -36,6 +53,8 @@ def _authenticator() -> stauth.Authenticate:
     if not credentials:
         st.error("`auth.credentials` is not set. Update it in secrets.")
         st.stop()
+
+    credentials = _to_plain_dict(credentials)
 
     return stauth.Authenticate(
         credentials,

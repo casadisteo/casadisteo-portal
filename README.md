@@ -41,3 +41,40 @@ In your DNS provider for `casadisteo.com`:
 Notes:
 - The `docs/CNAME` file in this repo sets the custom domain to `casadisteo.com`.
 - DNS can take a bit to propagate; HTTPS may take a little longer to appear in GitHub Pages.
+
+## Private supplies portal (Render + Google Sheets)
+
+This repo also contains a private Streamlit portal (`app.py`) you can deploy on Render and point to `portal.casadisteo.com`.
+
+### Google Sheet setup
+
+Create a Google Sheet with a tab named `inventory` and headers like:
+
+- `item`
+- `current_qty`
+- `reorder_at`
+- `unit` (optional)
+- `notes` (optional)
+
+### Secrets (login + Google Sheets)
+
+Copy `.streamlit/secrets.toml.example` and fill it in. On Render, add it as a **Secret File** at path:
+
+`/opt/render/project/src/.streamlit/secrets.toml`
+
+### Deploy to Render
+
+- Create a new **Web Service**
+- Connect this GitHub repo
+- Render will detect `render.yaml`
+- Deploy
+
+### Point `portal.casadisteo.com` to Render
+
+In Namecheap Advanced DNS:
+
+- Add a **CNAME** record:
+  - **Host**: `portal`
+  - **Value**: the hostname Render gives you for the service (e.g. `your-service.onrender.com`)
+
+Then add the custom domain in Render for the service and enable HTTPS.

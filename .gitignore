@@ -202,6 +202,9 @@ cython_debug/
 .cursorignore
 .cursorindexingignore
 
+# Streamlit secrets (never commit)
+.streamlit/secrets.toml
+
 # Local scratch / notes
 .backupcode
 

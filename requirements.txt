@@ -3,3 +3,6 @@
 streamlit
 streamlit-authenticator
 pyyaml
+pandas
+gspread
+google-auth

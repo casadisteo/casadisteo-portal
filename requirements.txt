@@ -1,8 +1,8 @@
 --index-url https://pypi.org/simple
 
 streamlit
-streamlit-authenticator
 pyyaml
 pandas
 gspread
 google-auth
+bcrypt

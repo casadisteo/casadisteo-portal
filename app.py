@@ -1,30 +1,13 @@
 import streamlit as st
-import streamlit_authenticator as stauth
 import json
 from typing import Any
 
 import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
+import bcrypt
 
 st.set_page_config(page_title="Casadisteo Portal", layout="wide")
-
-def _to_plain_dict(obj: Any) -> Any:
-    """
-    Streamlit secrets objects are immutable mappings. Some libraries (like
-    streamlit-authenticator) expect a mutable dict and may write into it.
-    Convert nested mappings/lists into plain Python types.
-    """
-    if isinstance(obj, dict):
-        return {k: _to_plain_dict(v) for k, v in obj.items()}
-    if hasattr(obj, "items"):
-        # Covers Streamlit's Secrets / AttrDict-like mappings
-        return {k: _to_plain_dict(v) for k, v in obj.items()}
-    if isinstance(obj, list):
-        return [_to_plain_dict(v) for v in obj]
-    if isinstance(obj, tuple):
-        return tuple(_to_plain_dict(v) for v in obj)
-    return obj
 
 def _require_secrets() -> None:
     missing = []
@@ -41,27 +24,56 @@ def _require_secrets() -> None:
         st.info("Use `.streamlit/secrets.toml.example` as a template.")
         st.stop()
 
-def _authenticator() -> stauth.Authenticate:
+def _get_users() -> dict[str, dict[str, str]]:
+    """
+    Reads users from Streamlit secrets using the same structure as streamlit-authenticator:
+      [auth.credentials.usernames.<username>]
+      name = "..."
+      password = "<bcrypt hash>"
+    """
     auth = st.secrets["auth"]
-    cookie_name = auth.get("cookie_name", "casadisteo_portal")
-    cookie_key = auth.get("cookie_key")
-    if not cookie_key or cookie_key == "CHANGE_ME_TO_A_LONG_RANDOM_STRING":
-        st.error("`auth.cookie_key` is not set. Update it in secrets.")
+    credentials = auth.get("credentials") or {}
+    usernames = credentials.get("usernames") or {}
+    if not usernames:
+        st.error("No users found in `auth.credentials.usernames` in secrets.")
         st.stop()
+    # Convert to plain dict (Streamlit secrets are immutable mappings)
+    return {u: {"name": v.get("name", u), "password": v.get("password", "")} for u, v in usernames.items()}
 
-    credentials = auth.get("credentials")
-    if not credentials:
-        st.error("`auth.credentials` is not set. Update it in secrets.")
-        st.stop()
+def _check_password(plain_password: str, password_hash: str) -> bool:
+    if not plain_password or not password_hash:
+        return False
+    try:
+        return bcrypt.checkpw(plain_password.encode("utf-8"), password_hash.encode("utf-8"))
+    except Exception:
+        return False
 
-    credentials = _to_plain_dict(credentials)
+def _login_gate() -> tuple[str, str]:
+    """
+    Returns (username, display_name) if authenticated; otherwise renders login form and stops.
+    """
+    if st.session_state.get("auth_username") and st.session_state.get("auth_name"):
+        return st.session_state["auth_username"], st.session_state["auth_name"]
 
-    return stauth.Authenticate(
-        credentials,
-        cookie_name,
-        cookie_key,
-        cookie_expiry_days=int(auth.get("cookie_expiry_days", 7)),
-    )
+    users = _get_users()
+
+    st.title("🏠 Casadisteo Supplies Portal")
+    st.info("Please log in")
+
+    with st.form("login_form", clear_on_submit=False):
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
+        submitted = st.form_submit_button("Login")
+
+    if submitted:
+        user = users.get(username)
+        if user and _check_password(password, user.get("password", "")):
+            st.session_state["auth_username"] = username
+            st.session_state["auth_name"] = user.get("name", username)
+            st.rerun()
+        st.error("Invalid credentials")
+
+    st.stop()
 
 def _sheet_client() -> gspread.Client:
     gs = st.secrets["google_sheets"]
@@ -116,81 +128,59 @@ def _coerce_numeric(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
 
 
 _require_secrets()
-authenticator = _authenticator()
+username, display_name = _login_gate()
 
-login_fields = {
-    "Form name": "Login",
-    "Username": "Username",
-    "Password": "Password",
-    "Login": "Login",
-}
+st.sidebar.success(f"Welcome {display_name}")
+if st.sidebar.button("Logout"):
+    st.session_state.pop("auth_username", None)
+    st.session_state.pop("auth_name", None)
+    st.rerun()
 
-login_result = authenticator.login(
-    location="main",
-    fields=login_fields,
-    clear_on_submit=True,
-    key="casadisteo_login",
-)
-if login_result is None:
-    name, authentication_status, username = None, None, None
-else:
-    name, authentication_status, username = login_result
+ws, df = _load_inventory()
+df = _coerce_numeric(df, ["current_qty", "reorder_at"])
 
-if authentication_status:
-    st.sidebar.success(f"Welcome {name}")
-    authenticator.logout(button_name="Logout", location="sidebar", key="Logout")
+if df.empty:
+    st.info("No inventory rows found yet. Add rows to your Google Sheet tab first.")
+    st.stop()
 
-    st.title("🏠 Casadisteo Supplies Portal")
+required_cols = {"item", "current_qty", "reorder_at"}
+missing_cols = sorted(list(required_cols - set(df.columns)))
+if missing_cols:
+    st.error(
+        "Your sheet is missing required columns: "
+        + ", ".join(missing_cols)
+        + ". Add them to row 1 (headers)."
+    )
+    st.stop()
 
-    ws, df = _load_inventory()
-    df = _coerce_numeric(df, ["current_qty", "reorder_at"])
+low = df[df["current_qty"].fillna(0) <= df["reorder_at"].fillna(0)].copy()
+low = low.sort_values(["item"], kind="stable") if "item" in low.columns else low
 
-    if df.empty:
-        st.info("No inventory rows found yet. Add rows to your Google Sheet tab first.")
-        st.stop()
+tab_low, tab_all = st.tabs(["About to end", "All inventory"])
 
-    required_cols = {"item", "current_qty", "reorder_at"}
-    missing_cols = sorted(list(required_cols - set(df.columns)))
-    if missing_cols:
-        st.error(
-            "Your sheet is missing required columns: "
-            + ", ".join(missing_cols)
-            + ". Add them to row 1 (headers)."
-        )
-        st.stop()
+with tab_low:
+    st.subheader("About to end")
+    st.caption("Items where current_qty <= reorder_at")
+    st.dataframe(low, use_container_width=True)
 
-    low = df[df["current_qty"].fillna(0) <= df["reorder_at"].fillna(0)].copy()
-    low = low.sort_values(["item"], kind="stable") if "item" in low.columns else low
+with tab_all:
+    st.subheader("All inventory")
+    st.caption("Edit quantities/thresholds and save back to the Google Sheet.")
 
-    tab_low, tab_all = st.tabs(["About to end", "All inventory"])
+    edited = st.data_editor(
+        df,
+        use_container_width=True,
+        num_rows="dynamic",
+        disabled=[c for c in ["updated_at"] if c in df.columns],
+    )
 
-    with tab_low:
-        st.subheader("About to end")
-        st.caption("Items where current_qty <= reorder_at")
-        st.dataframe(low, use_container_width=True)
-
-    with tab_all:
-        st.subheader("All inventory")
-        st.caption("Edit quantities/thresholds and save back to the Google Sheet.")
-
-        edited = st.data_editor(
-            df,
-            use_container_width=True,
-            num_rows="dynamic",
-            disabled=[c for c in ["updated_at"] if c in df.columns],
-        )
-
-        col1, col2 = st.columns([1, 3])
-        with col1:
-            if st.button("Save changes", type="primary"):
-                _save_inventory(ws, edited)
-                st.success("Saved to Google Sheets.")
-                st.rerun()
-        with col2:
-            st.write("")
-            st.write("")
-            st.info("Tip: keep the first row in Sheets as the header row.")
-elif authentication_status is False:
-    st.error("Invalid credentials")
-else:
-    st.warning("Please log in")
+    col1, col2 = st.columns([1, 3])
+    with col1:
+        if st.button("Save changes", type="primary"):
+            _save_inventory(ws, edited)
+            st.success("Saved to Google Sheets.")
+            st.rerun()
+    with col2:
+        st.write("")
+        st.write("")
+        st.info("Tip: keep the first row in Sheets as the header row.")

@@ -118,7 +118,11 @@ def _coerce_numeric(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
 _require_secrets()
 authenticator = _authenticator()
 
-name, authentication_status, username = authenticator.login(location="main", key="Login")
+login_result = authenticator.login(location="main", key="Login")
+if login_result is None:
+    name, authentication_status, username = None, None, None
+else:
+    name, authentication_status, username = login_result
 
 if authentication_status:
     st.sidebar.success(f"Welcome {name}")

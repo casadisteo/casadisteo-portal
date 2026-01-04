@@ -118,7 +118,19 @@ def _coerce_numeric(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
 _require_secrets()
 authenticator = _authenticator()
 
-login_result = authenticator.login(location="main", key="Login")
+login_fields = {
+    "Form name": "Login",
+    "Username": "Username",
+    "Password": "Password",
+    "Login": "Login",
+}
+
+login_result = authenticator.login(
+    location="main",
+    fields=login_fields,
+    clear_on_submit=True,
+    key="casadisteo_login",
+)
 if login_result is None:
     name, authentication_status, username = None, None, None
 else:

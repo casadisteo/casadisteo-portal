@@ -78,6 +78,7 @@ def _login_gate() -> tuple[str, str]:
 
     st.stop()
 
+@st.cache_resource(show_spinner=False)
 def _sheet_client() -> gspread.Client:
     gs = st.secrets["google_sheets"]
     raw = gs.get("gcp_service_account_json")
@@ -95,9 +96,9 @@ def _sheet_client() -> gspread.Client:
     creds = Credentials.from_service_account_info(info, scopes=scopes)
     return gspread.authorize(creds)
 
-def _open_spreadsheet() -> gspread.Spreadsheet:
+@st.cache_resource(show_spinner=False)
+def _open_spreadsheet(sheet_id: str) -> gspread.Spreadsheet:
     gs = st.secrets["google_sheets"]
-    sheet_id = gs.get("sheet_id")
     if not sheet_id:
         st.error("`google_sheets.sheet_id` is not set. Update it in secrets.")
         st.stop()
@@ -105,16 +106,20 @@ def _open_spreadsheet() -> gspread.Spreadsheet:
     client = _sheet_client()
     return client.open_by_key(sheet_id)
 
-def _load_worksheet(spreadsheet: gspread.Spreadsheet, worksheet_name: str) -> tuple[gspread.Worksheet, pd.DataFrame]:
-    try:
-        ws = spreadsheet.worksheet(worksheet_name)
-    except Exception:
-        st.error(f"Worksheet `{worksheet_name}` not found in the spreadsheet.")
-        st.stop()
+@st.cache_data(ttl=30, show_spinner=False)
+def _list_worksheet_titles(sheet_id: str) -> list[str]:
+    spreadsheet = _open_spreadsheet(sheet_id)
+    return [ws.title for ws in spreadsheet.worksheets()]
 
-    records = ws.get_all_records()
-    df = pd.DataFrame(records)
-    return ws, df
+@st.cache_data(ttl=30, show_spinner=False)
+def _read_worksheet_values(sheet_id: str, worksheet_name: str) -> list[list[str]]:
+    """
+    Returns all worksheet values (including header row) as strings.
+    Cached to avoid hitting Google Sheets read quota on Streamlit reruns.
+    """
+    spreadsheet = _open_spreadsheet(sheet_id)
+    ws = spreadsheet.worksheet(worksheet_name)
+    return ws.get_all_values()
 
 def _save_worksheet(ws: gspread.Worksheet, df: pd.DataFrame) -> None:
     headers = ws.row_values(1)
@@ -140,28 +145,25 @@ if st.sidebar.button("Logout"):
     st.session_state.pop("auth_name", None)
     st.rerun()
 
-spreadsheet = _open_spreadsheet()
-
 gs_cfg = st.secrets["google_sheets"]
+sheet_id = gs_cfg.get("sheet_id")
+spreadsheet = _open_spreadsheet(sheet_id)
+
+titles = _list_worksheet_titles(sheet_id)
 configured_ws = (gs_cfg.get("worksheet") or "").strip()
-worksheet_candidates: list[str] = []
+
+preferred_order: list[str] = []
 if configured_ws:
-    worksheet_candidates.append(configured_ws)
-worksheet_candidates.extend(TEMPLATE_WORKSHEETS)
-# Also try lowercase variants for convenience (e.g. "registro")
-worksheet_candidates.extend([w.lower() for w in TEMPLATE_WORKSHEETS])
+    preferred_order.append(configured_ws)
+preferred_order.extend(TEMPLATE_WORKSHEETS)
+preferred_order.extend([w.lower() for w in TEMPLATE_WORKSHEETS])
 
 available_worksheets: list[str] = []
 seen = set()
-for w in worksheet_candidates:
-    if not w or w in seen:
-        continue
-    seen.add(w)
-    try:
-        spreadsheet.worksheet(w)
-    except Exception:
-        continue
-    available_worksheets.append(w)
+for name in preferred_order:
+    if name and name in titles and name not in seen:
+        available_worksheets.append(name)
+        seen.add(name)
 
 if not available_worksheets:
     st.error(
@@ -171,31 +173,38 @@ if not available_worksheets:
     st.stop()
 
 st.title("🏠 Casadisteo Supplies Portal")
-st.caption("Google Sheets editor (tabs: FARMACI, POSOLOGIA, INVENTARIO, REGISTRO, LISTE).")
+st.caption("Google Sheets editor (select a tab to edit).")
 
-tabs = st.tabs(available_worksheets)
-for tab, worksheet_name in zip(tabs, available_worksheets, strict=True):
-    with tab:
-        ws, df = _load_worksheet(spreadsheet, worksheet_name)
+with st.sidebar:
+    st.subheader("Worksheet")
+    worksheet_name = st.selectbox("Choose a worksheet", options=available_worksheets, index=0)
+    if st.button("Refresh data"):
+        _list_worksheet_titles.clear()
+        _read_worksheet_values.clear()
+        st.rerun()
 
-        if df.empty:
-            st.info("No rows found yet. Add rows to this tab in Google Sheets.")
-            # Still show an empty editor with the headers (if any) so users can add rows from the app.
-            headers = ws.row_values(1)
-            if headers:
-                df = pd.DataFrame(columns=headers)
+values = _read_worksheet_values(sheet_id, worksheet_name)
+if not values:
+    st.info("This worksheet is empty. Add a header row in Google Sheets (row 1).")
+    st.stop()
 
-        edited = st.data_editor(
-            df,
-            use_container_width=True,
-            num_rows="dynamic",
-        )
+headers = values[0]
+rows = values[1:]
+df = pd.DataFrame(rows, columns=headers) if headers else pd.DataFrame()
 
-        col1, col2 = st.columns([1, 3])
-        with col1:
-            if st.button(f"Save {worksheet_name}", type="primary"):
-                _save_worksheet(ws, edited)
-                st.success("Saved to Google Sheets.")
-                st.rerun()
-        with col2:
-            st.info("Tip: keep the first row in Sheets as the header row.")
+edited = st.data_editor(
+    df,
+    use_container_width=True,
+    num_rows="dynamic",
+)
+
+col1, col2 = st.columns([1, 3])
+with col1:
+    if st.button("Save changes", type="primary"):
+        ws = spreadsheet.worksheet(worksheet_name)
+        _save_worksheet(ws, edited)
+        _read_worksheet_values.clear()
+        st.success("Saved to Google Sheets.")
+        st.rerun()
+with col2:
+    st.info("Tip: keep the first row in Sheets as the header row.")

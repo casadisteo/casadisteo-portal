@@ -7,7 +7,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 import bcrypt
 
-st.set_page_config(page_title="Casadisteo Portal", layout="wide")
+st.set_page_config(page_title="Portale Casadisteo", layout="wide")
 
 TEMPLATE_WORKSHEETS = ["FARMACI", "POSOLOGIA", "INVENTARIO", "REGISTRO", "LISTE"]
 
@@ -62,11 +62,11 @@ def _require_secrets() -> None:
         missing.append("google_sheets")
     if missing:
         st.error(
-            "Missing Streamlit secrets: "
+            "Secrets Streamlit mancanti: "
             + ", ".join(missing)
-            + ". Add them in Render (Environment → Secret Files) or locally as .streamlit/secrets.toml."
+            + ". Aggiungili su Render (Environment → Secret Files) oppure in locale in `.streamlit/secrets.toml`."
         )
-        st.info("Use `.streamlit/secrets.toml.example` as a template.")
+        st.info("Usa `.streamlit/secrets.toml.example` come template.")
         st.stop()
 
 def _get_users() -> dict[str, dict[str, str]]:
@@ -80,7 +80,7 @@ def _get_users() -> dict[str, dict[str, str]]:
     credentials = auth.get("credentials") or {}
     usernames = credentials.get("usernames") or {}
     if not usernames:
-        st.error("No users found in `auth.credentials.usernames` in secrets.")
+        st.error("Nessun utente trovato in `auth.credentials.usernames` nei secrets.")
         st.stop()
     # Convert to plain dict (Streamlit secrets are immutable mappings)
     return {u: {"name": v.get("name", u), "password": v.get("password", "")} for u, v in usernames.items()}
@@ -102,13 +102,13 @@ def _login_gate() -> tuple[str, str]:
 
     users = _get_users()
 
-    st.title("🏠 Casadisteo Supplies Portal")
-    st.info("Please log in")
+    st.title("🏠 Portale scorte Casadisteo")
+    st.info("Accedi per continuare")
 
     with st.form("login_form", clear_on_submit=False):
-        username = st.text_input("Username")
+        username = st.text_input("Nome utente")
         password = st.text_input("Password", type="password")
-        submitted = st.form_submit_button("Login")
+        submitted = st.form_submit_button("Accedi")
 
     if submitted:
         user = users.get(username)
@@ -117,7 +117,7 @@ def _login_gate() -> tuple[str, str]:
             st.session_state["auth_name"] = user.get("name", username)
             st.rerun()
         else:
-            st.error("Invalid credentials")
+            st.error("Credenziali non valide")
 
     st.stop()
 
@@ -126,13 +126,13 @@ def _sheet_client() -> gspread.Client:
     gs = st.secrets["google_sheets"]
     raw = gs.get("gcp_service_account_json")
     if not raw:
-        st.error("`google_sheets.gcp_service_account_json` is not set. Update it in secrets.")
+        st.error("`google_sheets.gcp_service_account_json` non è impostato. Aggiornalo nei secrets.")
         st.stop()
 
     try:
         info: dict[str, Any] = json.loads(raw)
     except Exception:
-        st.error("`google_sheets.gcp_service_account_json` must be valid JSON.")
+        st.error("`google_sheets.gcp_service_account_json` deve essere JSON valido.")
         st.stop()
 
     scopes = ["https://www.googleapis.com/auth/spreadsheets"]
@@ -143,7 +143,7 @@ def _sheet_client() -> gspread.Client:
 def _open_spreadsheet(sheet_id: str) -> gspread.Spreadsheet:
     gs = st.secrets["google_sheets"]
     if not sheet_id:
-        st.error("`google_sheets.sheet_id` is not set. Update it in secrets.")
+        st.error("`google_sheets.sheet_id` non è impostato. Aggiornalo nei secrets.")
         st.stop()
 
     client = _sheet_client()
@@ -167,7 +167,7 @@ def _read_worksheet_values(sheet_id: str, worksheet_name: str) -> list[list[str]
 def _save_worksheet(ws: gspread.Worksheet, df: pd.DataFrame) -> None:
     headers = ws.row_values(1)
     if not headers:
-        st.error("Worksheet header row (row 1) is empty.")
+        st.error("La riga intestazione (riga 1) del foglio è vuota.")
         st.stop()
 
     for col in headers:
@@ -182,8 +182,8 @@ def _save_worksheet(ws: gspread.Worksheet, df: pd.DataFrame) -> None:
 _require_secrets()
 username, display_name = _login_gate()
 
-st.sidebar.success(f"Welcome {display_name}")
-if st.sidebar.button("Logout"):
+st.sidebar.success(f"Ciao {display_name}")
+if st.sidebar.button("Esci"):
     st.session_state.pop("auth_username", None)
     st.session_state.pop("auth_name", None)
     st.rerun()
@@ -210,20 +210,20 @@ for name in preferred_order:
 
 if not available_worksheets:
     st.error(
-        "No expected worksheets found. Create the tabs from `medicinali_google_sheet_template.md` "
-        "or set `google_sheets.worksheet` to an existing tab name."
+        "Non ho trovato nessun foglio atteso. Crea i tab da `medicinali_google_sheet_template.md` "
+        "oppure imposta `google_sheets.worksheet` con il nome di un tab esistente."
     )
     st.stop()
 
-st.title("🏠 Casadisteo Supplies Portal")
-st.caption("Google Sheets editor + medication forecast.")
+st.title("🏠 Portale scorte Casadisteo")
+st.caption("Editor Google Sheets + previsione esaurimento farmaci.")
 
-tab_editor, tab_forecast = st.tabs(["🗂️ Sheets editor", "📅 Medications forecast"])
+tab_editor, tab_forecast = st.tabs(["🗂️ Editor fogli", "📅 Previsione farmaci"])
 
 with st.sidebar:
-    st.subheader("Worksheet editor")
-    worksheet_name = st.selectbox("Choose a worksheet", options=available_worksheets, index=0)
-    if st.button("Refresh data"):
+    st.subheader("Editor foglio")
+    worksheet_name = st.selectbox("Scegli un foglio", options=available_worksheets, index=0)
+    if st.button("Aggiorna dati"):
         _list_worksheet_titles.clear()
         _read_worksheet_values.clear()
         st.rerun()
@@ -231,7 +231,7 @@ with st.sidebar:
 with tab_editor:
     values = _read_worksheet_values(sheet_id, worksheet_name)
     if not values:
-        st.info("This worksheet is empty. Add a header row in Google Sheets (row 1).")
+        st.info("Questo foglio è vuoto. Aggiungi una riga intestazione in Google Sheets (riga 1).")
         st.stop()
 
     headers = values[0]
@@ -246,14 +246,14 @@ with tab_editor:
 
     col1, col2 = st.columns([1, 3])
     with col1:
-        if st.button("Save changes", type="primary"):
+        if st.button("Salva modifiche", type="primary"):
             ws = spreadsheet.worksheet(worksheet_name)
             _save_worksheet(ws, edited)
             _read_worksheet_values.clear()
-            st.success("Saved to Google Sheets.")
+            st.success("Salvato su Google Sheets.")
             st.rerun()
     with col2:
-        st.info("Tip: keep the first row in Sheets as the header row.")
+        st.info("Suggerimento: tieni la prima riga (riga 1) come intestazione.")
 
 with tab_forecast:
     ws_farmaci = _match_worksheet(titles, "FARMACI")
@@ -263,21 +263,21 @@ with tab_forecast:
     missing_tabs = [name for name, ws in [("FARMACI", ws_farmaci), ("POSOLOGIA", ws_posologia), ("INVENTARIO", ws_inventario)] if not ws]
     if missing_tabs:
         st.warning(
-            "Missing worksheet(s) needed for forecast: "
+            "Mancano i fogli necessari per la previsione: "
             + ", ".join(missing_tabs)
-            + ". Create them from `medicinali_google_sheet_template.md`."
+            + ". Creali usando `medicinali_google_sheet_template.md`."
         )
         st.stop()
 
     col_a, col_b, col_c = st.columns([2, 2, 3])
     with col_a:
-        lead_time_days = st.number_input("Buy in advance (days)", min_value=0, max_value=90, value=7, step=1)
+        lead_time_days = st.number_input("Compra in anticipo (giorni)", min_value=0, max_value=90, value=7, step=1)
     with col_b:
-        warn_within_days = st.number_input("Highlight if runs out within (days)", min_value=1, max_value=365, value=14, step=1)
+        warn_within_days = st.number_input("Evidenzia se finisce entro (giorni)", min_value=1, max_value=365, value=14, step=1)
     with col_c:
         st.caption(
-            "Assumption: inventory `quantita` is either already in the same unit as the dose, "
-            "or it represents packages that can be converted via `pezzi_per_confezione`."
+            "Assunzione: `quantita` in inventario è già nella stessa unità della dose, "
+            "oppure rappresenta confezioni convertibili tramite `pezzi_per_confezione`."
         )
 
     farmaci_df = _values_to_df(_read_worksheet_values(sheet_id, ws_farmaci))
@@ -296,7 +296,7 @@ with tab_forecast:
             if c not in df0.columns:
                 missing_cols.append(f"{key}.{c}")
     if missing_cols:
-        st.warning("Forecast can't run because these columns are missing: " + ", ".join(missing_cols))
+        st.warning("Impossibile calcolare la previsione: mancano queste colonne: " + ", ".join(missing_cols))
         st.stop()
 
     pos = posologia_df.copy()
@@ -316,8 +316,8 @@ with tab_forecast:
     unknown = pos[pos["weekly_mult"].isna()]
     if not unknown.empty:
         st.warning(
-            "Some POSOLOGIA rows use an unsupported `frequenza` (currently supported: giornaliera, settimanale). "
-            "Those rows are ignored in the forecast."
+            "Alcune righe in POSOLOGIA hanno una `frequenza` non supportata (supportate: giornaliera, settimanale). "
+            "Queste righe vengono ignorate nella previsione."
         )
 
     pos = pos.dropna(subset=["dose_f", "weekly_mult"])
@@ -366,20 +366,32 @@ with tab_forecast:
 
     k1, k2, k3 = st.columns(3)
     with k1:
-        st.metric("Meds with known run-out date", int(out["run_out_date"].notna().sum()))
+        st.metric("Farmaci con esaurimento calcolato", int(out["run_out_date"].notna().sum()))
     with k2:
-        st.metric(f"Runs out within {int(warn_within_days)} days", soon_count)
+        st.metric(f"Esaurimento entro {int(warn_within_days)} giorni", soon_count)
     with k3:
-        st.metric("Earliest run-out", earliest.date().isoformat() if pd.notna(earliest) else "—")
+        st.metric("Primo esaurimento", earliest.date().isoformat() if pd.notna(earliest) else "—")
 
+    out_display = out.rename(
+        columns={
+            "farmaco_id": "ID farmaco",
+            "nome_commerciale": "Nome",
+            "unita": "Unità",
+            "stock_units": "Scorte (unità)",
+            "daily_units": "Consumo/giorno",
+            "days_left": "Giorni rimasti",
+            "buy_by_date": "Comprare entro",
+            "run_out_date": "Esaurimento previsto",
+        }
+    )
     st.dataframe(
-        out.style.format(
+        out_display.style.format(
             {
-                "stock_units": "{:.2f}",
-                "daily_units": "{:.3f}",
-                "days_left": "{:.1f}",
-                "buy_by_date": lambda x: "" if pd.isna(x) else x.date().isoformat(),
-                "run_out_date": lambda x: "" if pd.isna(x) else x.date().isoformat(),
+                "Scorte (unità)": "{:.2f}",
+                "Consumo/giorno": "{:.3f}",
+                "Giorni rimasti": "{:.1f}",
+                "Comprare entro": lambda x: "" if pd.isna(x) else x.date().isoformat(),
+                "Esaurimento previsto": lambda x: "" if pd.isna(x) else x.date().isoformat(),
             }
         ).apply(
             lambda s: ["background-color: rgba(255, 165, 0, 0.25)"] * len(s) if soon_mask.loc[s.name] else [""] * len(s),

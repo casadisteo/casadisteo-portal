@@ -15,8 +15,26 @@
           "Apple Color Emoji", "Segoe UI Emoji";
         line-height: 1.5;
       }
-      main {
+      .layout {
         min-height: 100vh;
+        display: flex;
+      }
+      .sidebar {
+        width: 240px;
+        padding: 20px 16px;
+        border-right: 1px solid color-mix(in oklab, CanvasText 18%, Canvas 82%);
+        background: color-mix(in oklab, Canvas 94%, CanvasText 6%);
+      }
+      .sidebar a {
+        display: inline-block;
+        font-weight: 700;
+        text-decoration: none;
+        padding: 10px 12px;
+        border-radius: 12px;
+        background: color-mix(in oklab, Canvas 88%, CanvasText 12%);
+      }
+      main {
+        flex: 1;
         display: grid;
         place-items: center;
         padding: 24px;
@@ -58,31 +76,47 @@
         border-radius: 12px;
         background: color-mix(in oklab, Canvas 88%, CanvasText 12%);
       }
+      @media (max-width: 780px) {
+        .layout {
+          flex-direction: column;
+        }
+        .sidebar {
+          width: auto;
+          border-right: 0;
+          border-bottom: 1px solid color-mix(in oklab, CanvasText 18%, Canvas 82%);
+        }
+      }
     </style>
   </head>
   <body>
-    <main>
-      <section class="card">
-        <h1>Hello World</h1>
-        <p>
-          Homepage di <strong>casadisteo.com</strong>.
-        </p>
-        <p>
-          Piattaforma per aggiornamenti e per la gestione delle scorte e del piano terapeutico.
-        </p>
-        <hr />
-        <h2>Aggiornamenti</h2>
-        <p>
-          GoFundMe: <a href="https://www.gofundme.com/f/si-torna-a-casa">si torna a casa</a>
-        </p>
-        <iframe
-          class="embed"
-          src="https://www.gofundme.com/f/si-torna-a-casa"
-          title="GoFundMe - si torna a casa"
-          loading="lazy"
-          referrerpolicy="no-referrer-when-downgrade"
-        ></iframe>
-      </section>
-    </main>
+    <div class="layout">
+      <aside class="sidebar">
+        <a href="https://portal.casadisteo.com" rel="noopener noreferrer">Ciclable Portale</a>
+      </aside>
+      <main>
+        <section class="card">
+          <h1>Hello World</h1>
+          <p>
+            Homepage di <strong>casadisteo.com</strong>.
+          </p>
+          <p>
+            Piattaforma per aggiornamenti e per la gestione delle scorte e del piano terapeutico.
+          </p>
+          <hr />
+          <h2>Aggiornamenti</h2>
+          <p>
+            GoFundMe:
+            <a href="https://www.gofundme.com/f/si-torna-a-casa">si torna a casa</a>
+          </p>
+          <iframe
+            class="embed"
+            src="https://www.gofundme.com/f/si-torna-a-casa"
+            title="GoFundMe - si torna a casa"
+            loading="lazy"
+            referrerpolicy="no-referrer-when-downgrade"
+          ></iframe>
+        </section>
+      </main>
+    </div>
   </body>
 </html>

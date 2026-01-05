@@ -9,6 +9,8 @@ import bcrypt
 
 st.set_page_config(page_title="Casadisteo Portal", layout="wide")
 
+TEMPLATE_WORKSHEETS = ["FARMACI", "POSOLOGIA", "INVENTARIO", "REGISTRO", "LISTE"]
+
 def _require_secrets() -> None:
     missing = []
     if "auth" not in st.secrets:
@@ -93,21 +95,28 @@ def _sheet_client() -> gspread.Client:
     creds = Credentials.from_service_account_info(info, scopes=scopes)
     return gspread.authorize(creds)
 
-def _load_inventory() -> tuple[gspread.Worksheet, pd.DataFrame]:
+def _open_spreadsheet() -> gspread.Spreadsheet:
     gs = st.secrets["google_sheets"]
     sheet_id = gs.get("sheet_id")
-    worksheet_name = gs.get("worksheet", "inventory")
     if not sheet_id:
         st.error("`google_sheets.sheet_id` is not set. Update it in secrets.")
         st.stop()
 
     client = _sheet_client()
-    ws = client.open_by_key(sheet_id).worksheet(worksheet_name)
+    return client.open_by_key(sheet_id)
+
+def _load_worksheet(spreadsheet: gspread.Spreadsheet, worksheet_name: str) -> tuple[gspread.Worksheet, pd.DataFrame]:
+    try:
+        ws = spreadsheet.worksheet(worksheet_name)
+    except Exception:
+        st.error(f"Worksheet `{worksheet_name}` not found in the spreadsheet.")
+        st.stop()
+
     records = ws.get_all_records()
     df = pd.DataFrame(records)
     return ws, df
 
-def _save_inventory(ws: gspread.Worksheet, df: pd.DataFrame) -> None:
+def _save_worksheet(ws: gspread.Worksheet, df: pd.DataFrame) -> None:
     headers = ws.row_values(1)
     if not headers:
         st.error("Worksheet header row (row 1) is empty.")
@@ -121,12 +130,6 @@ def _save_inventory(ws: gspread.Worksheet, df: pd.DataFrame) -> None:
     values = [headers] + out.values.tolist()
     ws.update(values)
 
-def _coerce_numeric(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
-    for c in cols:
-        if c in df.columns:
-            df[c] = pd.to_numeric(df[c], errors="coerce")
-    return df
-
 
 _require_secrets()
 username, display_name = _login_gate()
@@ -137,51 +140,62 @@ if st.sidebar.button("Logout"):
     st.session_state.pop("auth_name", None)
     st.rerun()
 
-ws, df = _load_inventory()
-df = _coerce_numeric(df, ["current_qty", "reorder_at"])
+spreadsheet = _open_spreadsheet()
 
-if df.empty:
-    st.info("No inventory rows found yet. Add rows to your Google Sheet tab first.")
-    st.stop()
+gs_cfg = st.secrets["google_sheets"]
+configured_ws = (gs_cfg.get("worksheet") or "").strip()
+worksheet_candidates: list[str] = []
+if configured_ws:
+    worksheet_candidates.append(configured_ws)
+worksheet_candidates.extend(TEMPLATE_WORKSHEETS)
+# Also try lowercase variants for convenience (e.g. "registro")
+worksheet_candidates.extend([w.lower() for w in TEMPLATE_WORKSHEETS])
 
-required_cols = {"item", "current_qty", "reorder_at"}
-missing_cols = sorted(list(required_cols - set(df.columns)))
-if missing_cols:
+available_worksheets: list[str] = []
+seen = set()
+for w in worksheet_candidates:
+    if not w or w in seen:
+        continue
+    seen.add(w)
+    try:
+        spreadsheet.worksheet(w)
+    except Exception:
+        continue
+    available_worksheets.append(w)
+
+if not available_worksheets:
     st.error(
-        "Your sheet is missing required columns: "
-        + ", ".join(missing_cols)
-        + ". Add them to row 1 (headers)."
+        "No expected worksheets found. Create the tabs from `medicinali_google_sheet_template.md` "
+        "or set `google_sheets.worksheet` to an existing tab name."
     )
     st.stop()
 
-low = df[df["current_qty"].fillna(0) <= df["reorder_at"].fillna(0)].copy()
-low = low.sort_values(["item"], kind="stable") if "item" in low.columns else low
+st.title("🏠 Casadisteo Supplies Portal")
+st.caption("Google Sheets editor (tabs: FARMACI, POSOLOGIA, INVENTARIO, REGISTRO, LISTE).")
 
-tab_low, tab_all = st.tabs(["About to end", "All inventory"])
+tabs = st.tabs(available_worksheets)
+for tab, worksheet_name in zip(tabs, available_worksheets, strict=True):
+    with tab:
+        ws, df = _load_worksheet(spreadsheet, worksheet_name)
 
-with tab_low:
-    st.subheader("About to end")
-    st.caption("Items where current_qty <= reorder_at")
-    st.dataframe(low, use_container_width=True)
+        if df.empty:
+            st.info("No rows found yet. Add rows to this tab in Google Sheets.")
+            # Still show an empty editor with the headers (if any) so users can add rows from the app.
+            headers = ws.row_values(1)
+            if headers:
+                df = pd.DataFrame(columns=headers)
 
-with tab_all:
-    st.subheader("All inventory")
-    st.caption("Edit quantities/thresholds and save back to the Google Sheet.")
+        edited = st.data_editor(
+            df,
+            use_container_width=True,
+            num_rows="dynamic",
+        )
 
-    edited = st.data_editor(
-        df,
-        use_container_width=True,
-        num_rows="dynamic",
-        disabled=[c for c in ["updated_at"] if c in df.columns],
-    )
-
-    col1, col2 = st.columns([1, 3])
-    with col1:
-        if st.button("Save changes", type="primary"):
-            _save_inventory(ws, edited)
-            st.success("Saved to Google Sheets.")
-            st.rerun()
-    with col2:
-        st.write("")
-        st.write("")
-        st.info("Tip: keep the first row in Sheets as the header row.")
+        col1, col2 = st.columns([1, 3])
+        with col1:
+            if st.button(f"Save {worksheet_name}", type="primary"):
+                _save_worksheet(ws, edited)
+                st.success("Saved to Google Sheets.")
+                st.rerun()
+        with col2:
+            st.info("Tip: keep the first row in Sheets as the header row.")

@@ -11,6 +11,49 @@ st.set_page_config(page_title="Casadisteo Portal", layout="wide")
 
 TEMPLATE_WORKSHEETS = ["FARMACI", "POSOLOGIA", "INVENTARIO", "REGISTRO", "LISTE"]
 
+def _to_bool(v: Any) -> bool:
+    if isinstance(v, bool):
+        return v
+    s = str(v or "").strip().lower()
+    return s in {"true", "1", "yes", "y", "si", "sì", "vero"}
+
+def _to_float(v: Any) -> float | None:
+    if v is None:
+        return None
+    s = str(v).strip()
+    if not s:
+        return None
+    s = s.replace(",", ".")
+    try:
+        return float(s)
+    except Exception:
+        return None
+
+def _values_to_df(values: list[list[str]]) -> pd.DataFrame:
+    if not values:
+        return pd.DataFrame()
+    headers = values[0] if values else []
+    rows = values[1:] if len(values) > 1 else []
+    if not headers:
+        return pd.DataFrame()
+    return pd.DataFrame(rows, columns=headers)
+
+def _match_worksheet(titles: list[str], desired: str) -> str | None:
+    if desired in titles:
+        return desired
+    desired_l = desired.strip().lower()
+    for t in titles:
+        if t.strip().lower() == desired_l:
+            return t
+    return None
+
+def _giorni_settimana_count(raw: Any) -> int:
+    s = str(raw or "").strip()
+    if not s:
+        return 1
+    parts = [p.strip() for p in s.split(",") if p.strip()]
+    return max(1, len(parts))
+
 def _require_secrets() -> None:
     missing = []
     if "auth" not in st.secrets:
@@ -173,38 +216,174 @@ if not available_worksheets:
     st.stop()
 
 st.title("🏠 Casadisteo Supplies Portal")
-st.caption("Google Sheets editor (select a tab to edit).")
+st.caption("Google Sheets editor + medication forecast.")
+
+tab_editor, tab_forecast = st.tabs(["🗂️ Sheets editor", "📅 Medications forecast"])
 
 with st.sidebar:
-    st.subheader("Worksheet")
+    st.subheader("Worksheet editor")
     worksheet_name = st.selectbox("Choose a worksheet", options=available_worksheets, index=0)
     if st.button("Refresh data"):
         _list_worksheet_titles.clear()
         _read_worksheet_values.clear()
         st.rerun()
 
-values = _read_worksheet_values(sheet_id, worksheet_name)
-if not values:
-    st.info("This worksheet is empty. Add a header row in Google Sheets (row 1).")
-    st.stop()
+with tab_editor:
+    values = _read_worksheet_values(sheet_id, worksheet_name)
+    if not values:
+        st.info("This worksheet is empty. Add a header row in Google Sheets (row 1).")
+        st.stop()
 
-headers = values[0]
-rows = values[1:]
-df = pd.DataFrame(rows, columns=headers) if headers else pd.DataFrame()
+    headers = values[0]
+    rows = values[1:]
+    df = pd.DataFrame(rows, columns=headers) if headers else pd.DataFrame()
 
-edited = st.data_editor(
-    df,
-    use_container_width=True,
-    num_rows="dynamic",
-)
+    edited = st.data_editor(
+        df,
+        use_container_width=True,
+        num_rows="dynamic",
+    )
 
-col1, col2 = st.columns([1, 3])
-with col1:
-    if st.button("Save changes", type="primary"):
-        ws = spreadsheet.worksheet(worksheet_name)
-        _save_worksheet(ws, edited)
-        _read_worksheet_values.clear()
-        st.success("Saved to Google Sheets.")
-        st.rerun()
-with col2:
-    st.info("Tip: keep the first row in Sheets as the header row.")
+    col1, col2 = st.columns([1, 3])
+    with col1:
+        if st.button("Save changes", type="primary"):
+            ws = spreadsheet.worksheet(worksheet_name)
+            _save_worksheet(ws, edited)
+            _read_worksheet_values.clear()
+            st.success("Saved to Google Sheets.")
+            st.rerun()
+    with col2:
+        st.info("Tip: keep the first row in Sheets as the header row.")
+
+with tab_forecast:
+    ws_farmaci = _match_worksheet(titles, "FARMACI")
+    ws_posologia = _match_worksheet(titles, "POSOLOGIA")
+    ws_inventario = _match_worksheet(titles, "INVENTARIO")
+
+    missing_tabs = [name for name, ws in [("FARMACI", ws_farmaci), ("POSOLOGIA", ws_posologia), ("INVENTARIO", ws_inventario)] if not ws]
+    if missing_tabs:
+        st.warning(
+            "Missing worksheet(s) needed for forecast: "
+            + ", ".join(missing_tabs)
+            + ". Create them from `medicinali_google_sheet_template.md`."
+        )
+        st.stop()
+
+    col_a, col_b, col_c = st.columns([2, 2, 3])
+    with col_a:
+        lead_time_days = st.number_input("Buy in advance (days)", min_value=0, max_value=90, value=7, step=1)
+    with col_b:
+        warn_within_days = st.number_input("Highlight if runs out within (days)", min_value=1, max_value=365, value=14, step=1)
+    with col_c:
+        st.caption(
+            "Assumption: inventory `quantita` is either already in the same unit as the dose, "
+            "or it represents packages that can be converted via `pezzi_per_confezione`."
+        )
+
+    farmaci_df = _values_to_df(_read_worksheet_values(sheet_id, ws_farmaci))
+    posologia_df = _values_to_df(_read_worksheet_values(sheet_id, ws_posologia))
+    inventario_df = _values_to_df(_read_worksheet_values(sheet_id, ws_inventario))
+
+    required_cols = {
+        "farmaci": {"farmaco_id", "nome_commerciale"},
+        "posologia": {"farmaco_id", "dose", "unita", "frequenza", "giorni_settimana", "attivo"},
+        "inventario": {"farmaco_id", "quantita", "pezzi_per_confezione"},
+    }
+    missing_cols = []
+    for key, cols in required_cols.items():
+        df0 = {"farmaci": farmaci_df, "posologia": posologia_df, "inventario": inventario_df}[key]
+        for c in cols:
+            if c not in df0.columns:
+                missing_cols.append(f"{key}.{c}")
+    if missing_cols:
+        st.warning("Forecast can't run because these columns are missing: " + ", ".join(missing_cols))
+        st.stop()
+
+    pos = posologia_df.copy()
+    pos["attivo_bool"] = pos["attivo"].map(_to_bool)
+    pos = pos[pos["attivo_bool"]]
+    pos["dose_f"] = pos["dose"].map(_to_float)
+
+    def _weekly_multiplier(row: pd.Series) -> float | None:
+        freq = str(row.get("frequenza") or "").strip().lower()
+        if freq == "giornaliera":
+            return 7.0
+        if freq == "settimanale":
+            return float(_giorni_settimana_count(row.get("giorni_settimana")))
+        return None
+
+    pos["weekly_mult"] = pos.apply(_weekly_multiplier, axis=1)
+    unknown = pos[pos["weekly_mult"].isna()]
+    if not unknown.empty:
+        st.warning(
+            "Some POSOLOGIA rows use an unsupported `frequenza` (currently supported: giornaliera, settimanale). "
+            "Those rows are ignored in the forecast."
+        )
+
+    pos = pos.dropna(subset=["dose_f", "weekly_mult"])
+    pos["weekly_units"] = pos["dose_f"] * pos["weekly_mult"]
+
+    consumption = (
+        pos.groupby(["farmaco_id", "unita"], as_index=False)
+        .agg(weekly_units=("weekly_units", "sum"))
+    )
+    consumption["daily_units"] = consumption["weekly_units"] / 7.0
+
+    inv = inventario_df.copy()
+    inv["quantita_f"] = inv["quantita"].map(_to_float)
+    inv["pezzi_f"] = inv["pezzi_per_confezione"].map(_to_float)
+    inv["stock_units"] = inv.apply(
+        lambda r: (r["quantita_f"] or 0.0) * (r["pezzi_f"] if (r["pezzi_f"] and r["pezzi_f"] > 0) else 1.0),
+        axis=1,
+    )
+    stock = inv.groupby("farmaco_id", as_index=False).agg(stock_units=("stock_units", "sum"))
+
+    out = consumption.merge(stock, on="farmaco_id", how="left")
+    out["stock_units"] = out["stock_units"].fillna(0.0)
+    out["days_left"] = out.apply(
+        lambda r: (r["stock_units"] / r["daily_units"]) if (r["daily_units"] and r["daily_units"] > 0) else None,
+        axis=1,
+    )
+
+    today = pd.Timestamp.today().normalize()
+    out["run_out_date"] = out["days_left"].map(lambda d: (today + pd.to_timedelta(d, unit="D")) if d is not None else pd.NaT)
+    out["buy_by_date"] = out["run_out_date"].map(
+        lambda d: (d - pd.Timedelta(days=int(lead_time_days))) if pd.notna(d) else pd.NaT
+    )
+
+    out = out.merge(
+        farmaci_df[["farmaco_id", "nome_commerciale"]],
+        on="farmaco_id",
+        how="left",
+    )
+
+    out = out[["farmaco_id", "nome_commerciale", "unita", "stock_units", "daily_units", "days_left", "buy_by_date", "run_out_date"]]
+    out = out.sort_values(["run_out_date", "nome_commerciale"], na_position="last")
+
+    soon_mask = out["run_out_date"].notna() & (out["run_out_date"] <= (today + pd.Timedelta(days=int(warn_within_days))))
+    soon_count = int(soon_mask.sum())
+    earliest = out["run_out_date"].dropna().min()
+
+    k1, k2, k3 = st.columns(3)
+    with k1:
+        st.metric("Meds with known run-out date", int(out["run_out_date"].notna().sum()))
+    with k2:
+        st.metric(f"Runs out within {int(warn_within_days)} days", soon_count)
+    with k3:
+        st.metric("Earliest run-out", earliest.date().isoformat() if pd.notna(earliest) else "—")
+
+    st.dataframe(
+        out.style.format(
+            {
+                "stock_units": "{:.2f}",
+                "daily_units": "{:.3f}",
+                "days_left": "{:.1f}",
+                "buy_by_date": lambda x: "" if pd.isna(x) else x.date().isoformat(),
+                "run_out_date": lambda x: "" if pd.isna(x) else x.date().isoformat(),
+            }
+        ).apply(
+            lambda s: ["background-color: rgba(255, 165, 0, 0.25)"] * len(s) if soon_mask.loc[s.name] else [""] * len(s),
+            axis=1,
+        ),
+        use_container_width=True,
+    )

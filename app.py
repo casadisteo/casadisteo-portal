@@ -287,7 +287,7 @@ with tab_forecast:
     required_cols = {
         "farmaci": {"farmaco_id", "nome_commerciale"},
         "posologia": {"farmaco_id", "dose", "unita", "frequenza", "giorni_settimana", "attivo"},
-        "inventario": {"farmaco_id", "quantita", "pezzi_per_confezione"},
+        "inventario": {"farmaco_id", "data_acquisto", "quantita", "pezzi_per_confezione"},
     }
     missing_cols = []
     for key, cols in required_cols.items():
@@ -329,23 +329,79 @@ with tab_forecast:
     )
     consumption["daily_units"] = consumption["weekly_units"] / 7.0
 
+    today = pd.Timestamp.today().normalize()
+
     inv = inventario_df.copy()
+    inv["data_acquisto_dt"] = pd.to_datetime(inv["data_acquisto"], errors="coerce").dt.normalize()
     inv["quantita_f"] = inv["quantita"].map(_to_float)
     inv["pezzi_f"] = inv["pezzi_per_confezione"].map(_to_float)
     inv["stock_units"] = inv.apply(
         lambda r: (r["quantita_f"] or 0.0) * (r["pezzi_f"] if (r["pezzi_f"] and r["pezzi_f"] > 0) else 1.0),
         axis=1,
     )
-    stock = inv.groupby("farmaco_id", as_index=False).agg(stock_units=("stock_units", "sum"))
 
-    out = consumption.merge(stock, on="farmaco_id", how="left")
+    def _stock_as_of_today_for_med(inv_med: pd.DataFrame, daily_units: float) -> float:
+        """
+        INVENTARIO is treated as a purchase log (ingressi).
+        We replay purchases over time and subtract expected consumption from purchase dates to today,
+        without letting stock go below 0 (handles gaps + later re-buys).
+        """
+        if inv_med.empty:
+            return 0.0
+
+        inv_med = inv_med.copy()
+        inv_med["data_acquisto_dt"] = inv_med["data_acquisto_dt"].fillna(today)
+        inv_med = inv_med[inv_med["data_acquisto_dt"] <= today]
+        if inv_med.empty:
+            return 0.0
+
+        inv_med = inv_med.groupby("data_acquisto_dt", as_index=False).agg(stock_units=("stock_units", "sum"))
+        inv_med = inv_med.sort_values("data_acquisto_dt")
+
+        if not daily_units or daily_units <= 0:
+            return float(inv_med["stock_units"].sum())
+
+        stock_units = 0.0
+        last_date: pd.Timestamp | None = None
+        for _, r in inv_med.iterrows():
+            d = r["data_acquisto_dt"]
+            q = float(r["stock_units"] or 0.0)
+            if last_date is None:
+                last_date = d
+            elif d > last_date:
+                days = (d - last_date).days
+                stock_units = max(0.0, stock_units - (daily_units * float(days)))
+                last_date = d
+            stock_units += q
+
+        if last_date is not None and today > last_date:
+            days = (today - last_date).days
+            stock_units = max(0.0, stock_units - (daily_units * float(days)))
+
+        return stock_units
+
+    inv_by_med = {k: g for k, g in inv.groupby("farmaco_id")}
+    stock_today_rows = []
+    for _, r in consumption.iterrows():
+        fid = r["farmaco_id"]
+        daily = float(r["daily_units"] or 0.0)
+        inv_med = inv_by_med.get(fid)
+        stock_today_rows.append(
+            {
+                "farmaco_id": fid,
+                "unita": r["unita"],
+                "stock_units": _stock_as_of_today_for_med(inv_med if inv_med is not None else pd.DataFrame(), daily),
+            }
+        )
+    stock_today = pd.DataFrame(stock_today_rows)
+
+    out = consumption.merge(stock_today, on=["farmaco_id", "unita"], how="left")
     out["stock_units"] = out["stock_units"].fillna(0.0)
     out["days_left"] = out.apply(
         lambda r: (r["stock_units"] / r["daily_units"]) if (r["daily_units"] and r["daily_units"] > 0) else None,
         axis=1,
     )
 
-    today = pd.Timestamp.today().normalize()
     out["run_out_date"] = out["days_left"].map(lambda d: (today + pd.to_timedelta(d, unit="D")) if d is not None else pd.NaT)
     out["buy_by_date"] = out["run_out_date"].map(
         lambda d: (d - pd.Timedelta(days=int(lead_time_days))) if pd.notna(d) else pd.NaT

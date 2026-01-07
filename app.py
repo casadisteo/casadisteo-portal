@@ -271,9 +271,9 @@ with tab_forecast:
 
     col_a, col_b, col_c = st.columns([2, 2, 3])
     with col_a:
-        lead_time_days = st.number_input("Compra in anticipo (giorni)", min_value=0, max_value=90, value=7, step=1)
+        lead_time_days = st.number_input("Compra in anticipo (giorni)", min_value=0, max_value=90, value=5, step=1)
     with col_b:
-        warn_within_days = st.number_input("Evidenzia se finisce entro (giorni)", min_value=1, max_value=365, value=14, step=1)
+        warn_within_days = st.number_input("Evidenzia se finisce entro (giorni)", min_value=1, max_value=365, value=3, step=1)
     with col_c:
         st.caption(
             "Assunzione: `quantita` in inventario è già nella stessa unità della dose, "
